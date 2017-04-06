@@ -3,22 +3,106 @@
 # Test DeepSIM status lights.
 
 import opc, time, copy
-import math
-import numpy as N
+import waves
+# import math
+# import numpy as N
+
+##### This section is for CircuitPython, change to your pin & NeoPixel count: #####
+# import board
+# import nativeio
+# NEOPIXEL_PIN   = board.D6
+# NEOPIXEL_COUNT = 12
+# def seconds():
+#     return time.monotonic()  # CircuitPython function for current seconds.
+
+##### This section is for MicroPython, change to your pin & NeoPixel count: #####
+# import machine
+# import utime
+# NEOPIXEL_PIN   = machine.Pin(6, machine.Pin.OUT)
+# NEOPIXEL_COUNT = 12
+# def seconds():
+#     return utime.ticks_ms()/1000  # MicroPython code for current seconds
+
+# This section is for the FadeCandy
+
+# # Setup NeoPixels:
+# import neopixel
+# pixels = neopixel.NeoPixel(NEOPIXEL_PIN, NEOPIXEL_COUNT)
+# pixels.fill((0,0,0))
+# pixels.write()
+#
+
+# print(time.monotonic())
+# seconds()
+# for i in range(1,1000):
+#     clock.update()
+#     color = (red_wave(), green_wave(), 0)
+#     pixels.fill(color)
+#     pixels.write()
+#     # print("r={}\tg={}\tb={}".format(*color))
+#     # time.sleep(0.1)
+#
+# print(time.monotonic())
+# seconds()
+#
+
 
 PI = 3.14159
-ringStart=(512-64)
-outerLEDs=24
-innerLEDs=12
-totalLEDs = (innerLEDs+outerLEDs)
+ringStart = (512-64)
+ringsLEDs = (1, 6, 12, 24)
+totalLEDs = sum(ringsLEDs)
 
 cabinetStart=0
 cabinetLEDs=30
 
 #Setup stuff.
 
-power = 128
+glow = 0 # Sets the background brightness. We could define here a function to keep a changing background signal
+power = 128 # Sets the maximum power
 
+clock = FrameClock()
+sine_wave   = waves.TransformedSignal(waves.SineWave(phase = ),
+                                      y0 = glow,
+                                      y1 = power,
+                                      discrete = True)
+
+decay_wave = waves.TransformedSignal(waves.DecayWave(decay = 2.0,
+                                                     phase = ),
+                                      y0 = glow,
+                                      y1 = power,
+                                      discrete=True)
+
+
+class FramePhase(waves.Signal):
+
+    def __init__(self, nrOfLEDs, piBased = False):
+        self.nrOfLEDs = nrOfLEDs
+        self.piBased = piBased
+
+    def __call__(self, LED):
+        if self.piBased:
+            return (2 * PI * LED) / self.nrOfLEDs
+        else:
+            LED / self.nrOfLEDs
+
+
+class FrameClock(waves.Signal):
+
+    def __init__(self):
+        self.update()
+
+    def update(self):
+        # Hack below to reduce the impact noisey ADC frequency.  When time
+        # values build up to large number then small frequency variations (like
+        # noise from the ADC/potentiometer) are greatly magnified.  By running
+        # the current seconds through a modulo 60 it will prevent the frame
+        # clock from getting large values while still increasing and wrapping
+        # at the same rate. This will only work for driving repeating signals
+        # like sine waves, etc.
+        self._current_s = seconds() % 60
+
+    def __call__(self):
+        return self._current_s
 
 
 class StatusLED():
@@ -27,15 +111,14 @@ class StatusLED():
         #make an intensity array for the whole fadecandy addressable pixels.
         self.intensity = [(0,0,0)] * 512 
         #inital ppower level is 100 (out of 255)
-        self.power = 100
-        self.outerLEDs=outerLEDs
-        self.innerLEDs=innerLEDs
-        self.totalLEDs=(outerLEDs+innerLEDs)
-        self.ringStart=ringStart
-        self.cabinetStart=cabinetStart
-        self.cabinetLEDs=cabinetLEDs
-        self.progress=0
-        self.savedProgress=(0,0,0)
+        self.power = power
+        self.ringsLEDs = ringsLEDs
+        self.totalLEDs = totalLEDs
+        self.ringStart = ringStart
+        self.cabinetStart = cabinetStart
+        self.cabinetLEDs = cabinetLEDs
+        self.progress = 0
+        self.savedProgress = (0,0,0)
         
     #Function to call on an image snap
     def onSnap(self,t=0.1):
