@@ -61,13 +61,15 @@ glow = 0 # Sets the background brightness. We could define here a function to ke
 power = 128 # Sets the maximum power
 
 clock = FrameClock()
-sine_wave   = waves.TransformedSignal(waves.SineWave(phase = ),
+piBasedPhase = FramePhase(piBased = True)
+noPiBasedPhase = FramePhase(piBased = False)
+sine_wave   = waves.TransformedSignal(waves.SineWave(phase = piBasedPhase)),
                                       y0 = glow,
                                       y1 = power,
                                       discrete = True)
 
 decay_wave = waves.TransformedSignal(waves.DecayWave(decay = 2.0,
-                                                     phase = ),
+                                                     phase = noPiBasedPhase),
                                       y0 = glow,
                                       y1 = power,
                                       discrete=True)
@@ -78,12 +80,16 @@ class FramePhase(waves.Signal):
     def __init__(self, nrOfLEDs, piBased = False):
         self.nrOfLEDs = nrOfLEDs
         self.piBased = piBased
+        self.update(0)
 
-    def __call__(self, LED):
+    def update(self, LED):
         if self.piBased:
-            return (2 * PI * LED) / self.nrOfLEDs
+            self._current_phase = (2 * PI * LED) / self.nrOfLEDs
         else:
-            LED / self.nrOfLEDs
+            self._current_phase = LED / self.nrOfLEDs
+
+    def __call__(self):
+        return self._current_phase
 
 
 class FrameClock(waves.Signal):
