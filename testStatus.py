@@ -10,46 +10,7 @@ import waves
 
 
 # import math
-# import numpy as N
-
-##### This section is for CircuitPython, change to your pin & NeoPixel count: #####
-# import board
-# import nativeio
-# NEOPIXEL_PIN   = board.D6
-# NEOPIXEL_COUNT = 12
-# def seconds():
-#     return time.monotonic()  # CircuitPython function for current seconds.
-
-##### This section is for MicroPython, change to your pin & NeoPixel count: #####
-# import machine
-# import utime
-# NEOPIXEL_PIN   = machine.Pin(6, machine.Pin.OUT)
-# NEOPIXEL_COUNT = 12
-# def seconds():
-#     return utime.ticks_ms()/1000  # MicroPython code for current seconds
-
-# This section is for the FadeCandy
-
-# # Setup NeoPixels:
-# import neopixel
-# pixels = neopixel.NeoPixel(NEOPIXEL_PIN, NEOPIXEL_COUNT)
-# pixels.fill((0,0,0))
-# pixels.write()
-#
-
-# print(time.monotonic())
-# seconds()
-# for i in range(1,1000):
-#     clock.update()
-#     color = (red_wave(), green_wave(), 0)
-#     pixels.fill(color)
-#     pixels.write()
-#     # print("r={}\tg={}\tb={}".format(*color))
-#     # time.sleep(0.1)
-#
-# print(time.monotonic())
-# seconds()
-#
+# import numpy as np
 
 
 class FrameIntensity(waves.Signal):
@@ -158,6 +119,15 @@ class StatusLED:
         self.progress = 0
         self.savedProgress = (0, 0, 0)
 
+        # Elements to control state
+        self.stateDict = {'idle': 0,
+                          'runningExp': 10,
+                          'runningMosaic': 20,
+                          'error': 30
+                          }
+        self.state = 0
+        self.stateLock = threading.Lock
+
         # Some frames
         self.clock = FrameClock()
         self.frequency = FrameFrequency()
@@ -248,6 +218,14 @@ class StatusLED:
                                                        y1=self.blueIntensity,
                                                        discrete=True)
 
+    def setState(self, state):
+        with self.stateLock:
+            self.state = state
+
+    def getState(self):
+        with self.stateLock:
+            return self.state
+
     def onSnap(self, pattern=None):
         """
         Function to call on an image snap
@@ -311,6 +289,7 @@ class StatusLED:
         self.frequency.update(frequency)
         self.decay.update(decay)
 
+
         waveIntensity = copy.copy(self.intensity)
 
         for cycle in range(nbCycles):
@@ -325,8 +304,7 @@ class StatusLED:
 
         self.setLEDs(None)
 
-    def sineBeat(self, color, duration, glow, frequency):
-        nbCycles = int(duration * frequency)
+    def sineBeat(self, color, frequency, state):
 
         self.redIntensity.update(color[0])
         self.greenIntensity.update(color[1])
