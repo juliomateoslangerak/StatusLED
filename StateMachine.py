@@ -4,10 +4,8 @@ Raspberry. The current setup wil manage the status lights.
 '''
 
 from fysom import Fysom
+from transitions import Machine
 
-class StateMachine()
-    def __init__(self):
-        self.fsm = Fysom({'initial': 'configure',
 
 def onpanic(e):
     print('panic! ' + e.msg)
@@ -19,19 +17,22 @@ def onyellow(e):
     print('yellow')
 def onred(e):
     print('red')
+
+
 fsm = Fysom({'initial': 'green',
-             'events': [
-                 {'name': 'warn', 'src': 'green', 'dst': 'yellow'},
-                 {'name': 'panic', 'src': 'yellow', 'dst': 'red'},
-                 {'name': 'panic', 'src': 'green', 'dst': 'red'},
-                 {'name': 'calm', 'src': 'red', 'dst': 'yellow'},
-                 {'name': 'clear', 'src': 'yellow', 'dst': 'green'}],
-             'callbacks': {
-                 'onpanic': onpanic,
-                 'oncalm': oncalm,
-                 'ongreen': ongreen,
-                 'onyellow': onyellow,
-                 'onred': onred }})
+            'events': [
+                  {'name': 'warn', 'src': 'green', 'dst': 'yellow'},
+                  {'name': 'panic', 'src': 'yellow', 'dst': 'red'},
+                  {'name': 'panic', 'src': 'green', 'dst': 'red'},
+                  {'name': 'calm', 'src': 'red', 'dst': 'yellow'},
+                  {'name': 'clear', 'src': 'yellow', 'dst': 'green'}],
+            'callbacks': {
+                  'onpanic': onpanic,
+                  'oncalm': oncalm,
+                  'ongreen': ongreen,
+                  'onyellow': onyellow,
+                  'onred': onred}})
+
 
 fsm.panic(msg='killer bees')
 fsm.calm('bob', msg='sedatives in the honey pots')
