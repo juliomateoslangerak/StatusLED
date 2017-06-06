@@ -2,7 +2,7 @@
 
 # Test DeepSIM status lights.
 
-import threading
+from multiprocessing import Process, Value
 import opc
 import time
 import copy
@@ -10,46 +10,7 @@ import waves
 
 
 # import math
-# import numpy as N
-
-##### This section is for CircuitPython, change to your pin & NeoPixel count: #####
-# import board
-# import nativeio
-# NEOPIXEL_PIN   = board.D6
-# NEOPIXEL_COUNT = 12
-# def seconds():
-#     return time.monotonic()  # CircuitPython function for current seconds.
-
-##### This section is for MicroPython, change to your pin & NeoPixel count: #####
-# import machine
-# import utime
-# NEOPIXEL_PIN   = machine.Pin(6, machine.Pin.OUT)
-# NEOPIXEL_COUNT = 12
-# def seconds():
-#     return utime.ticks_ms()/1000  # MicroPython code for current seconds
-
-# This section is for the FadeCandy
-
-# # Setup NeoPixels:
-# import neopixel
-# pixels = neopixel.NeoPixel(NEOPIXEL_PIN, NEOPIXEL_COUNT)
-# pixels.fill((0,0,0))
-# pixels.write()
-#
-
-# print(time.monotonic())
-# seconds()
-# for i in range(1,1000):
-#     clock.update()
-#     color = (red_wave(), green_wave(), 0)
-#     pixels.fill(color)
-#     pixels.write()
-#     # print("r={}\tg={}\tb={}".format(*color))
-#     # time.sleep(0.1)
-#
-# print(time.monotonic())
-# seconds()
-#
+# import numpy as np
 
 
 class FrameIntensity(waves.Signal):
@@ -128,7 +89,6 @@ class FrameClock(waves.Signal):
     def __call__(self):
         return self._current_s
 
-
 class StatusLED:
     def __init__(self,
                  ringsLEDs,
@@ -139,6 +99,7 @@ class StatusLED:
                  client=opc.Client('localhost:7890'),
                  glow=(0, 0, 0),  # a tupple containing the min background color
                  power=128,  # the max poser we want to drive the leds. int from 0 to 255
+                 initState=0,
                  ):
 
         """
@@ -157,6 +118,10 @@ class StatusLED:
         self.intensity = [(0, 0, 0)] * 512  # make an intensity array for the whole fadecandy addressable pixels.
         self.progress = 0
         self.savedProgress = (0, 0, 0)
+
+        # Elements to control state
+        self.stateLock = threading.Lock
+        global curState = initState
 
         # Some frames
         self.clock = FrameClock()
@@ -248,6 +213,14 @@ class StatusLED:
                                                        y1=self.blueIntensity,
                                                        discrete=True)
 
+    def setState(self, state):
+        with self.stateLock:
+            self.state = state
+
+    def getState(self):
+        with self.stateLock:
+            return self.state
+
     def onSnap(self, pattern=None):
         """
         Function to call on an image snap
@@ -267,13 +240,8 @@ class StatusLED:
                 pulseIntensity[self.ringStart + i] = p[0]
             self.pulseLEDs(pulseIntensity, p[1])
 
-    def onError(self, t=1.0, repeats=30):
-        pulseIntensity = copy.copy(self.intensity)
-        for i in range(self.ringsLEDs[-1]):
-            pulseIntensity[self.ringStart + i] = (self.power, 0, 0)
-        for i in range(repeats):
-            self.pulseLEDs(pulseIntensity, t)
-            time.sleep(t)
+    def onError(self, errState, color=[self.power, 0, 0], frequency=1):
+        self.squareBeat(color, frequency, errState)
 
     def setWhite(self):
         for i in range(self.totalLEDs):
@@ -292,18 +260,16 @@ class StatusLED:
         self.setLEDs(pulseIntensity)
         self.setLEDs(None)
 
-    def chaseLEDs(self, color, duration, decay=1.0, ring=-1, frequency=1.0):
+    def chaseLEDs(self, color, state, decay=1.0, ring=-1, frequency=1.0):
         """
         Creates a LED chasing effect
         :param color: tupple with the color to display
-        :param duration: for how long to turn the effect. In seconds
+        :param state: which state is holding this effect
         :param decay: the decay factor
         :param ring: the ring to chase. Defaults to the outer ring
         :param frequency: how many turns per second. Defaults to 1
         :return: None
         """
-        nbCycles = int(duration * frequency)
-
         self.redIntensity.update(color[0])
         self.greenIntensity.update(color[1])
         self.blueIntensity.update(color[2])
@@ -313,7 +279,7 @@ class StatusLED:
 
         waveIntensity = copy.copy(self.intensity)
 
-        for cycle in range(nbCycles):
+        while state == global curState:
             self.clock.update()
             for led in range(self.ringsLEDs[ring]):
                 self.noPiBasedPhase.update(led, self.ringsLEDs[ring])
@@ -325,9 +291,14 @@ class StatusLED:
 
         self.setLEDs(None)
 
-    def sineBeat(self, color, duration, glow, frequency):
-        nbCycles = int(duration * frequency)
-
+    def sineBeat(self, color, state, frequency=1):
+        """
+        Creates a sinusoidal 'heart beat' of all leds
+        :param color: tupple with the color to display
+        :param state: which state is holding this effect
+        :param frequency: how many turns per second. Defaults to 1
+        :return: None
+        """
         self.redIntensity.update(color[0])
         self.greenIntensity.update(color[1])
         self.blueIntensity.update(color[2])
@@ -337,14 +308,42 @@ class StatusLED:
 
         waveIntensity = copy.copy(self.intensity)
 
-        for i in range(duration):
+        while curState == state:
             self.clock.update()
             for led in range(self.totalLEDs):
                 waveIntensity[self.ringStart + led] = (self.red_sineWave(),
                                                        self.green_sineWave(),
                                                        self.blue_sineWave())
             self.setLEDs(waveIntensity)
-            # time.sleep(0.1)
+            time.sleep(0.1)
+
+        self.setLEDs(None)
+
+    def squareBeat(self, color, frequency, state):
+        """
+        Creates a square 'heart beat' of all leds.
+        :param color: tupple with the color to display
+        :param state: which state is holding this effect
+        :param frequency: how many turns per second. Defaults to 1
+        :return: None
+        """
+        self.redIntensity.update(color[0])
+        self.greenIntensity.update(color[1])
+        self.blueIntensity.update(color[2])
+
+        self.frequency.update(frequency)
+        self.piBasedPhase.update(0, 0)
+
+        waveIntensity = copy.copy(self.intensity)
+
+        while curState == state:
+            self.clock.update()
+            for led in range(self.totalLEDs):
+                waveIntensity[self.ringStart + led] = (self.red_squareWave(),
+                                                       self.green_squareWave(),
+                                                       self.blue_squareWave())
+            self.setLEDs(waveIntensity)
+            time.sleep(0.1)
 
         self.setLEDs(None)
 
