@@ -7,6 +7,7 @@ import opc
 import time
 import copy
 import waves
+from multiprocessing import Queue
 
 
 # import math
@@ -25,7 +26,7 @@ class FrameIntensity(waves.Signal):
 
 
 class FramePhase(waves.Signal):
-    def __init__(self, piBased=False, phase=0):
+    def __init__(self, piBased=False, phase=0.0):
         self.piBased = piBased
         self._current_phase = phase
 
@@ -77,33 +78,35 @@ class FrameClock(waves.Signal):
         self._current_s = time.time()
 
     def update(self):
-        # Hack below to reduce the impact noisey ADC frequency.  When time
-        # values build up to large number then small frequency variations (like
-        # noise from the ADC/potentiometer) are greatly magnified.  By running
-        # the current seconds through a modulo 60 it will prevent the frame
-        # clock from getting large values while still increasing and wrapping
-        # at the same rate. This will only work for driving repeating signals
-        # like sine waves, etc.
         self._current_s = time.time()
 
     def __call__(self):
         return self._current_s
 
+class FrameTimer(waves.Signal):
+    """A class to manage a timer effect"""
+    def __init___(self, fraction=0.0):
+        self._current_t = fraction
+
+    def update(self, newFraction):
+        self._current_t = newFraction
+
+    def __call__(self):
+        return self._current_t
+
 class StatusLED:
     def __init__(self,
-                 ringsLEDs,
                  totalLEDs,
                  ringStart,
                  cabinetStart,
                  cabinetLEDs,
+                 ringsLEDs=(1, 6, 16, 24),
                  client=opc.Client('localhost:7890'),
                  glow=(0, 0, 0),  # a tupple containing the min background color
                  power=128,  # the max poser we want to drive the leds. int from 0 to 255
-                 initState=0,
                  ):
 
         """
-
         :int totalLEDs: total nr of LEDs
         :tuple ringsLEDs: tupple containing the nr of leds of every concentric ring from center to edge
         """
@@ -128,6 +131,7 @@ class StatusLED:
         self.frequency = FrameFrequency()
         self.decay = FrameDecay()
         self.duty = FrameDuty()
+        self.timer = FrameTimer()
         self.piBasedPhase = FramePhase(piBased=True)
         self.noPiBasedPhase = FramePhase(piBased=False)
         self.redIntensity = FrameIntensity(self.power)
@@ -213,35 +217,32 @@ class StatusLED:
                                                        y1=self.blueIntensity,
                                                        discrete=True)
 
-    def setState(self, state):
-        with self.stateLock:
-            self.state = state
+        self.red_timerWave = waves.TransformedSignal(waves.SquareWave(time=0,
+                                                                      frequency=1,
+                                                                      phase=self.timer,
+                                                                      duty=self.duty
+                                                                      ),
+                                                     y0=self.glow,
+                                                     y1=self.redIntensity,
+                                                     discrete=True)
 
-    def getState(self):
-        with self.stateLock:
-            return self.state
+        self.green_timerWave = waves.TransformedSignal(waves.SquareWave(time=0,
+                                                                        frequency=1,
+                                                                        phase=self.timer,
+                                                                        duty=self.duty
+                                                                        ),
+                                                       y0=self.glow,
+                                                       y1=self.greenIntensity,
+                                                       discrete=True)
 
-    def onSnap(self, pattern=None):
-        """
-        Function to call on an image snap
-
-        :param pattern: a list of lists of two elements from which the first one is
-        a list containing the color to pulse and the second is the pulse duration
-        :return: None
-        """
-        if pattern is None:
-            pattern = [[[self.redIntensity(),
-                         self.greenIntensity(),
-                         self.blueIntensity()],
-                        0.1]]
-        pulseIntensity = copy.copy(self.intensity)
-        for p in pattern:
-            for i in range(self.ringsLEDs[-1]):
-                pulseIntensity[self.ringStart + i] = p[0]
-            self.pulseLEDs(pulseIntensity, p[1])
-
-    def onError(self, errState, color=[self.power, 0, 0], frequency=1):
-        self.squareBeat(color, frequency, errState)
+        self.blue_timerWave = waves.TransformedSignal(waves.SquareWave(time=0,
+                                                                       frequency=1,
+                                                                       phase=self.timer,
+                                                                       duty=self.duty
+                                                                       ),
+                                                      y0=self.glow,
+                                                      y1=self.blueIntensity,
+                                                      discrete=True)
 
     def setWhite(self):
         for i in range(self.totalLEDs):
@@ -253,14 +254,33 @@ class StatusLED:
             self.intensity[self.ringStart + i] = (0, 0, 0)
         self.setLEDs(None)
 
-    def pulseLEDs(self, pulseIntensity, t=0.1):
+    def multiplePulse(self, pattern=None, t=0.2, ring=-1):
+        """
+        Function to call on an image snap
+
+        :param pattern: a list of lists of two elements from which the first one is
+        a list containing the color to pulse and the second is the pulse duration
+        :return: None
+        """
+        if pattern is None:
+            pattern = [[[self.redIntensity(),
+                         self.greenIntensity(),
+                         self.blueIntensity()],
+                        t]]
+        pulseColor = copy.copy(self.intensity)
+        for p in pattern:
+            for i in range(self.ringsLEDs[ring]):
+                pulseColor[self.ringStart + i] = p[0]
+            self.singlePulse(pulseColor=pulseColor, p[1])
+
+    def singlePulse(self, pulseColor, t=0.2):
         self.setLEDs(None)
-        self.setLEDs(pulseIntensity)
+        self.setLEDs(pulseColor)
         time.sleep(float(t))
-        self.setLEDs(pulseIntensity)
+        self.setLEDs(pulseColor)
         self.setLEDs(None)
 
-    def chaseLEDs(self, color, state, decay=1.0, ring=-1, frequency=1.0):
+    def chaseLEDs(self, color, stateQueue, decay=1.0, ring=-1, frequency=1.0):
         """
         Creates a LED chasing effect
         :param color: tupple with the color to display
@@ -279,7 +299,7 @@ class StatusLED:
 
         waveIntensity = copy.copy(self.intensity)
 
-        while state == global curState:
+        while stateQueue.empty():
             self.clock.update()
             for led in range(self.ringsLEDs[ring]):
                 self.noPiBasedPhase.update(led, self.ringsLEDs[ring])
@@ -291,7 +311,49 @@ class StatusLED:
 
         self.setLEDs(None)
 
-    def sineBeat(self, color, state, frequency=1):
+    def chaseLEDsTimer(self, chaseColor, timerColor, stateQueue, timerQueue, decay=1.0, chaseRing=3, timerRing=2, frequency=1.0):
+        """
+        Creates a LED chasing effect
+        :param color: tupple with the color to display
+        :param state: which state is holding this effect
+        :param decay: the decay factor
+        :param ring: the ring to chase. Defaults to the outer ring
+        :param frequency: how many turns per second. Defaults to 1
+        :return: None
+        """
+        self.redIntensity.update(chaseColor[0])
+        self.greenIntensity.update(chaseColor[1])
+        self.blueIntensity.update(chaseColor[2])
+
+        redTimerIntensity = FrameIntensity(timerColor[0])
+        greenTimerIntensity = FrameIntensity(timerColor[1])
+        blueTimerIntensity = FrameIntensity(timerColor[2])
+
+        self.frequency.update(frequency)
+        self.decay.update(decay)
+        self.timer.update(0.0)
+        self.duty.update(1 / self.ringsLEDs[timerRing])
+
+        waveIntensity = copy.copy(self.intensity)
+
+        while stateQueue.empty():
+            self.clock.update()
+            self.timer.update(timerQueue.get(block=False))
+            for led in range(self.ringsLEDs[chaseRing]):
+                self.noPiBasedPhase.update(led, self.ringsLEDs[chaseRing])
+                waveIntensity[self.ringStart + led] = (self.red_decayWave(),
+                                                       self.green_decayWave(),
+                                                       self.blue_decayWave())
+            for led in range(self.ringsLEDs[timerRing]):
+                waveIntensity[self.ringStart + led] = (self.red_timerWave(),
+                                                       self.green_timerWave(),
+                                                       self.blue_timerWave())
+            self.setLEDs(waveIntensity)
+            # time.sleep(0.1)
+
+        self.setLEDs(None)
+
+    def sineBeat(self, color, stateQueue, frequency=1.0):
         """
         Creates a sinusoidal 'heart beat' of all leds
         :param color: tupple with the color to display
@@ -308,7 +370,7 @@ class StatusLED:
 
         waveIntensity = copy.copy(self.intensity)
 
-        while curState == state:
+        while stateQueue.empty:
             self.clock.update()
             for led in range(self.totalLEDs):
                 waveIntensity[self.ringStart + led] = (self.red_sineWave(),
@@ -319,7 +381,7 @@ class StatusLED:
 
         self.setLEDs(None)
 
-    def squareBeat(self, color, frequency, state):
+    def squareBeat(self, color, stateQueue, frequency=1.0, duty=.5):
         """
         Creates a square 'heart beat' of all leds.
         :param color: tupple with the color to display
@@ -332,11 +394,12 @@ class StatusLED:
         self.blueIntensity.update(color[2])
 
         self.frequency.update(frequency)
+        self.duty.update(duty)
         self.piBasedPhase.update(0, 0)
 
         waveIntensity = copy.copy(self.intensity)
 
-        while curState == state:
+        while stateQueue.empty:
             self.clock.update()
             for led in range(self.totalLEDs):
                 waveIntensity[self.ringStart + led] = (self.red_squareWave(),
@@ -346,7 +409,6 @@ class StatusLED:
             time.sleep(0.1)
 
         self.setLEDs(None)
-
 
     def setLEDs(self, intensity):
         if intensity is None:
