@@ -1,34 +1,49 @@
-# from threading import Thread, Lock
-from multiprocessing import Value, Process, Queue
+from multiprocessing import Process, Queue
 from time import sleep
 
-StateQueue = Queue()
 
-class StatePrinter():
-    def __init__(self):
-        self.curState = 0
-        self.printState()
+class LED_processor(Process):
+    def __init__(self, effectQueue, outQueue):
+        Process.__init__(self)
+        self.effectQueue = effectQueue
+        self.outQueue = outQueue
 
-    def printState(self):
-        print('started')
-        while not self.curState == 5:
-            sleep(.5)
-            if StateQueue.empty():
-                pass
+    def effect(self, x):
+        calc = x * x
+        self.outQueue.put(calc)
+
+    def run(self):
+        while True:
+            f, x = self.effectQueue.get()
+            if f != 'kill':
+                getattr(self, f)(x)
             else:
-                self.curState = StateQueue.get()
-            print('running: ' + str(self.curState))
+                return
 
-def changeState(newState):
-    StateQueue.put(newState)
-    print('Changed to: ' + str(newState))
+
+class Machine:
+    def __init__(self):
+        print('Hi')
+        self.effectQueue = Queue()
+        self.outQueue = Queue()
+        self.LED_processor = LED_processor(self.effectQueue, self.outQueue)
+        print('LED_processor created')
+        self.LED_processor.start()
+
+    def run_effect(self, x):
+        self.effectQueue.put(['effect', x])
+        out = self.outQueue.get()
+        print(out)
+
+    def kill(self):
+        self.effectQueue.put(['kill',0])
+
+
 
 if __name__ == '__main__':
-    s = Process(target=StatePrinter)
-    s.start()
-    print('Process Started')
+    m = Machine()
+    sleep(2)
+    m.run_effect(3)
     sleep(3)
-    print('gonna change to 5')
-    changeState(5)
-    sleep(3)
-    s.join()
+    m.kill()
+    m.LED_processor.join()
