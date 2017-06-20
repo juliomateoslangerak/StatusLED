@@ -26,7 +26,7 @@ CABINET_LEDS = 30
 OPC_HOST = 'localhost'
 OPC_PORT = '7890'
 
-states = ['default',
+STATES = ['default',
           'start',
           'configure',
           'idle',
@@ -40,7 +40,7 @@ states = ['default',
           'shutdown',
           ]
 
-transitions = [
+TRANSITIONS = [
     ['on_default',       '*',            'default'],
     ['on_start',         'shutdown',     'start'],
     ['on_configure',     'start',        'configure'],
@@ -84,19 +84,18 @@ class FSMachine():
     The actions are running as separate processes and 
     there is a main loop getting status from the executor through a UDP socket and triggering the transitions"""
     # Define a State Machine
-    def __init__(self):
+    def __init__(self, states, transitions, stateQueue, timerQueue, effectQueue, initialState='start'):
         self.machine = Machine(model=self,
                                states=states,
                                transitions=transitions,
-                               initial='start',
+                               initial=initialState,
                                auto_transitions=False)
 
-        # Create queues to pass state and timepoint
-        self.stateQueue = Queue()
-        self.timerQueue = Queue()
-        self.effectQueue = Queue()
+        # Create queues to pass state and time point
+        self.timerQueue = timerQueue
+        self.effectQueue = effectQueue
 
-        # Create separate processes to run stuff
+        ## Create separate processes to run stuff and start them
 
         # A status LED processor
         self.statusLEDs = StatusLEDProcessor(effectQueue=self.effectQueue,
@@ -109,21 +108,7 @@ class FSMachine():
                                              host=OPC_HOST,
                                              port=OPC_PORT,
                                              )
-
-        # Create a FPGAStatus instance
-        self.FPGAStatus = FPGAStatus(host=UDP_IP_ADDRESS,
-                                     port=UDP_PORT_NO,
-                                     stateQueue = self.stateQueue,
-                                     timerQueue = self.timerQueue
-                                     )
-
-        # Create a statusLED processor
-        self.statusLEDs = StatusLEDProcessor(stateQueue=self.stateQueue,
-                                             timerQueue=self.timerQueue)
-
-        # Start all the processes
-        self.FPGAStatus.start()
-        self.run()
+        self.statusLEDs.start()
 
     # Configure the callbacks of the machine
     def on_enter_idle(self):
@@ -144,19 +129,23 @@ class FSMachine():
     def on_enter_shutdown(self):
         self.effectQueue.put(['on_enter_shutdown', None])
 
-    def run(self):
-        pass
 
-
-class FPGAStatus(Process):
-    def __init__(self, host, port, stateQueue, timerQueue):
-        Process.__init__(self)
+class FPGAStatus():
+    def __init__(self, host, port):
         ## Create a dictionary to store the full FPGA state
         self.currentFPGAStatus = {}
 
         ## Create the queues to communicate with the FSM
-        self.stateQueue = stateQueue
-        self.timerQueue - timerQueue
+        self.timerQueue = Queue()
+        self.effectQueue = Queue()
+
+        ## Create the FSM
+        self.machine = FSMachine(states=STATES,
+                                 transitions=TRANSITIONS,
+                                 stateQueue=self.stateQueue,
+                                 timerQueue=self.stateQueue,
+                                 effectQueue=self.effectQueue,
+                                 )
 
         ## create a socket
         self.socket = self.createReceiveSocket(host, port)
@@ -196,11 +185,11 @@ class FPGAStatus(Process):
         else:
             return self.currentFPGAStatus
 
-    def getFPGAStatus(self):
+    def poll_fpga_status(self):
         '''
         This method polls to a UDP socket and get the status information
         of the RT-host and FPGA.
-        It will update the FPGAStatus dictionary.
+        Returns a json object that we can use to update the status dictionary
         '''
         try:
             # Receive Datagram
@@ -212,27 +201,27 @@ class FPGAStatus(Process):
         # parse json datagram
         return json.loads(datagram)
 
-    def queueStateChanges(self, newStatus):
+    def trigger_transition(self, newStatus):
         '''
-        FInd interesting status or status changes in the FPGA and queue them
+        FInd interesting state or status changes in the FPGA and trigger
+        the corresponding machine transitions.
         return the newStatus but with the status reset so not to queue multiple times
         '''
-        if newStatus['FPGA Main State'] == 'FPGA done':
-            events.publish('DSP done')
-            newStatus['FPGA Main State'] = ''
+        if self.currentFPGAStatus['FPGA Main State'] != newStatus['FPGA Main State']:
+            new_main_state = MainFPGA_to_FSMachine_state[newStatus['FPGA Main State']]
+
 
         return newStatus
 
     def run(self):
 
-        self.currentFPGAStatus = self.getFPGAStatus()
+        self.currentFPGAStatus = self.poll_fpga_status()
 
         while self.shouldRun:
-            newFPGAStatus = self.getFPGAStatus()
-            with self.FPGAStatusLock:
-                if newFPGAStatus is not None and newFPGAStatus != self.currentFPGAStatus:
-                    # Queue any state change and update
-                    self.currentFPGAStatus = self.queueStateChanges(newStatus = newFPGAStatus)
+            newFPGAStatus = self.poll_fpga_status()
+            if newFPGAStatus is not None and newFPGAStatus != self.currentFPGAStatus:
+                # Trigger a transition and update current state
+                self.currentFPGAStatus = self.trigger_transition(newStatus = newFPGAStatus)
 
             ## wait for a period of half the broadcasting rate of the FPGA
             time.sleep(FPGA_UPDATE_RATE / 2)
