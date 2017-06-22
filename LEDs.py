@@ -2,12 +2,12 @@
 
 # Test DeepSIM status lights.
 
-from multiprocessing import Process, Value
+from multiprocessing import Process, Queue
 import opc
 import time
 import copy
 import waves
-from multiprocessing import Queue
+from math import pi
 
 class FrameIntensity(waves.Signal):
     def __init__(self, intensity):
@@ -27,7 +27,7 @@ class FramePhase(waves.Signal):
 
     def update(self, LED, nrOfLEDs):
         if self.piBased:
-            self._current_phase = (2 * PI * LED) / nrOfLEDs
+            self._current_phase = (2 * pi * LED) / nrOfLEDs
         else:
             self._current_phase = LED / nrOfLEDs
 
@@ -101,7 +101,7 @@ class StatusLED:
                  cabinetStart,
                  cabinetLEDs,
                  glow=(0, 0, 0),  # a tupple containing the min background color
-                 power=128,  # the max poser we want to drive the leds. int from 0 to 255
+                 power=(128, 128, 128),  # the max poser we want to drive the leds. int from 0 to 255
                  host = 'localhost',
                  port = '7890',
                  ):
@@ -111,7 +111,6 @@ class StatusLED:
         """
         self.effectQueue = effectQueue
         self.timerQueue = timerQueue
-        self.client = client
         self.glow = glow
         self.power = power
         self.ringsLEDs = ringsLEDs
@@ -122,7 +121,7 @@ class StatusLED:
         self.intensity = [(0, 0, 0)] * 512  # make an intensity array for the whole fadecandy addressable pixels.
         self.progress = 0
         self.savedProgress = (0, 0, 0)
-        self.client = opc.Client(host + ':' + port),
+        self.client = opc.Client(server_ip_port=str(host + ':' + port))  #, verbose=True)
 
         # Some frames
         self.clock = FrameClock()
@@ -132,9 +131,15 @@ class StatusLED:
         self.timer = FrameTimer()
         self.piBasedPhase = FramePhase(piBased=True)
         self.noPiBasedPhase = FramePhase(piBased=False)
-        self.redIntensity = FrameIntensity(self.power)
-        self.greenIntensity = FrameIntensity(self.power)
-        self.blueIntensity = FrameIntensity(self.power)
+        self.redGlow = FrameIntensity(self.glow[0])
+        self.greenGlow = FrameIntensity(self.glow[1])
+        self.blueGlow = FrameIntensity(self.glow[2])
+        self.redIntensity = FrameIntensity(self.power[0])
+        self.greenIntensity = FrameIntensity(self.power[1])
+        self.blueIntensity = FrameIntensity(self.power[2])
+        self.redTimerIntensity = FrameIntensity(self.power[0])
+        self.greenTimerIntensity = FrameIntensity(self.power[1])
+        self.blueTimerIntensity = FrameIntensity(self.power[2])
 
         # Some basic waves
         self.red_decayWave = waves.TransformedSignal(waves.DecayWave(time=self.clock,
@@ -142,7 +147,7 @@ class StatusLED:
                                                                      phase=self.noPiBasedPhase,
                                                                      decay=self.decay,
                                                                      ),
-                                                     y0=self.glow,
+                                                     y0=self.redGlow,
                                                      y1=self.redIntensity,
                                                      discrete=True)
 
@@ -151,7 +156,7 @@ class StatusLED:
                                                                        phase=self.noPiBasedPhase,
                                                                        decay=self.decay
                                                                        ),
-                                                       y0=self.glow,
+                                                       y0=self.greenGlow,
                                                        y1=self.greenIntensity,
                                                        discrete=True)
 
@@ -160,7 +165,7 @@ class StatusLED:
                                                                       phase=self.noPiBasedPhase,
                                                                       decay=self.decay
                                                                       ),
-                                                      y0=self.glow,
+                                                      y0=self.blueGlow,
                                                       y1=self.blueIntensity,
                                                       discrete=True)
 
@@ -168,7 +173,7 @@ class StatusLED:
                                                                    frequency=self.frequency,
                                                                    phase=self.piBasedPhase,
                                                                    ),
-                                                    y0=self.glow,
+                                                    y0=self.redGlow,
                                                     y1=self.redIntensity,
                                                     discrete=True)
 
@@ -176,7 +181,7 @@ class StatusLED:
                                                                      frequency=self.frequency,
                                                                      phase=self.piBasedPhase,
                                                                      ),
-                                                      y0=self.glow,
+                                                      y0=self.greenGlow,
                                                       y1=self.greenIntensity,
                                                       discrete=True)
 
@@ -184,7 +189,7 @@ class StatusLED:
                                                                     frequency=self.frequency,
                                                                     phase=self.piBasedPhase,
                                                                     ),
-                                                     y0=self.glow,
+                                                     y0=self.blueGlow,
                                                      y1=self.blueIntensity,
                                                      discrete=True)
 
@@ -193,7 +198,7 @@ class StatusLED:
                                                                        phase=self.piBasedPhase,
                                                                        duty=self.duty
                                                                        ),
-                                                      y0=self.glow,
+                                                      y0=self.redGlow,
                                                       y1=self.redIntensity,
                                                       discrete=True)
 
@@ -202,7 +207,7 @@ class StatusLED:
                                                                          phase=self.piBasedPhase,
                                                                          duty=self.duty
                                                                          ),
-                                                        y0=self.glow,
+                                                        y0=self.greenGlow,
                                                         y1=self.greenIntensity,
                                                         discrete=True)
 
@@ -211,40 +216,40 @@ class StatusLED:
                                                                         phase=self.piBasedPhase,
                                                                         duty=self.duty
                                                                         ),
-                                                       y0=self.glow,
+                                                       y0=self.blueGlow,
                                                        y1=self.blueIntensity,
                                                        discrete=True)
 
-        self.red_timerWave = waves.TransformedSignal(waves.SquareWave(time=0,
+        self.red_timerWave = waves.TransformedSignal(waves.SquareWave(time=self.timer,
                                                                       frequency=1,
-                                                                      phase=self.timer,
+                                                                      phase=self.noPiBasedPhase,
                                                                       duty=self.duty
                                                                       ),
-                                                     y0=self.glow,
-                                                     y1=self.redIntensity,
+                                                     y0=self.redGlow,
+                                                     y1=self.redTimerIntensity,
                                                      discrete=True)
 
-        self.green_timerWave = waves.TransformedSignal(waves.SquareWave(time=0,
+        self.green_timerWave = waves.TransformedSignal(waves.SquareWave(time=self.timer,
                                                                         frequency=1,
-                                                                        phase=self.timer,
+                                                                        phase=self.noPiBasedPhase,
                                                                         duty=self.duty
                                                                         ),
-                                                       y0=self.glow,
-                                                       y1=self.greenIntensity,
+                                                       y0=self.greenGlow,
+                                                       y1=self.greenTimerIntensity,
                                                        discrete=True)
 
-        self.blue_timerWave = waves.TransformedSignal(waves.SquareWave(time=0,
+        self.blue_timerWave = waves.TransformedSignal(waves.SquareWave(time=self.timer,
                                                                        frequency=1,
-                                                                       phase=self.timer,
+                                                                       phase=self.noPiBasedPhase,
                                                                        duty=self.duty
                                                                        ),
-                                                      y0=self.glow,
-                                                      y1=self.blueIntensity,
+                                                      y0=self.blueGlow,
+                                                      y1=self.blueTimerIntensity,
                                                       discrete=True)
 
     def setWhite(self):
         for i in range(self.totalLEDs):
-            self.intensity[self.ringStart + i] = (self.power, self.power, self.power)
+            self.intensity[self.ringStart + i] = self.power
         self.setLEDs(None)
 
     def setOff(self):
@@ -269,7 +274,7 @@ class StatusLED:
         for p in pattern:
             for i in range(self.ringsLEDs[ring]):
                 pulseColor[self.ringStart + i] = p[0]
-            self.singlePulse(pulseColor=pulseColor, p[1])
+            self.singlePulse(pulseColor=pulseColor, t=p[1])
 
     def singlePulse(self, pulseColor, t=0.2):
         self.setLEDs(None)
@@ -309,7 +314,7 @@ class StatusLED:
 
         self.setLEDs(None)
 
-    def chaseLEDsTimer(self, chaseColor, timerColor, decay=1.0, chaseRing=3, timerRing=2, frequency=1.0):
+    def chaseLEDsTimer(self, chaseColor, timerColor, decay=1.0, chaseRing=-1, timerRing=-2, frequency=1.0):
         """
         Creates a LED chasing effect
         :param color: tupple with the color to display
@@ -323,33 +328,39 @@ class StatusLED:
         self.greenIntensity.update(chaseColor[1])
         self.blueIntensity.update(chaseColor[2])
 
-        redTimerIntensity = FrameIntensity(timerColor[0])
-        greenTimerIntensity = FrameIntensity(timerColor[1])
-        blueTimerIntensity = FrameIntensity(timerColor[2])
+        self.redTimerIntensity.update(timerColor[0])
+        self.greenTimerIntensity.update(timerColor[1])
+        self.blueTimerIntensity.update(timerColor[2])
 
         self.frequency.update(frequency)
         self.decay.update(decay)
         self.timer.update(0.0)
         self.duty.update(1 / self.ringsLEDs[timerRing])
 
+        chaseStartLED = self.ringStart
+        timerStartLED = self.ringStart + self.ringsLEDs[chaseRing]
+
         waveIntensity = copy.copy(self.intensity)
 
         while self.effectQueue.empty():
             self.clock.update()
-            self.timer.update(self.timerQueue.get(block=False))
+            if not self.timerQueue.empty():
+                self.timer.update(self.timerQueue.get(block=False))
+
             for led in range(self.ringsLEDs[chaseRing]):
                 self.noPiBasedPhase.update(led, self.ringsLEDs[chaseRing])
-                waveIntensity[self.ringStart + led] = (self.red_decayWave(),
+                waveIntensity[chaseStartLED + led] = (self.red_decayWave(),
                                                        self.green_decayWave(),
                                                        self.blue_decayWave())
             for led in range(self.ringsLEDs[timerRing]):
-                waveIntensity[self.ringStart + led] = (self.red_timerWave(),
-                                                       self.green_timerWave(),
-                                                       self.blue_timerWave())
+                self.noPiBasedPhase.update(led, self.ringsLEDs[timerRing])
+                waveIntensity[timerStartLED + led] = (self.red_timerWave(),
+                                                      self.green_timerWave(),
+                                                      self.blue_timerWave())
             self.setLEDs(waveIntensity)
             # time.sleep(0.1)
 
-        while is not self.timerQueue.empty():
+        while not self.timerQueue.empty():
             self.timerQueue.get()
 
         self.setLEDs(None)
@@ -367,7 +378,7 @@ class StatusLED:
         self.blueIntensity.update(color[2])
 
         self.frequency.update(frequency)
-        self.piBasedPhase.update(0, 0)
+        self.piBasedPhase.update(0, 1)
 
         waveIntensity = copy.copy(self.intensity)
 
@@ -396,7 +407,7 @@ class StatusLED:
 
         self.frequency.update(frequency)
         self.duty.update(duty)
-        self.piBasedPhase.update(0, 0)
+        self.piBasedPhase.update(0, 1)
 
         waveIntensity = copy.copy(self.intensity)
 
@@ -483,30 +494,107 @@ class StatusLED:
 if __name__ == '__main__':
     """test the module"""
 
-    ringStart = (512 - 64)
-    ringsLEDs = (1, 6, 12, 24)
-    totalLEDs = sum(ringsLEDs)
+    FPGA_UPDATE_RATE = .1  # At which rate is the FPGA sending update status signals
 
-    cabinetStart = 0
-    cabinetLEDs = 30
+    RING_START = (512 - 64)
+    RING_LEDS = (1, 6, 16, 24)
+    # RING_LEDS = (24, 16, 6, 1)
+    TOTAL_LEDS = sum(RING_LEDS)
 
-    effectQueue = Queue()
+    CABINET_START = 0
+    CABINET_LEDS = 30
+
+    OPC_HOST = '127.0.0.1'
+    OPC_PORT = '7890'
+
     timerQueue = Queue()
+    effectQueue = Queue()
 
     LEDs = StatusLED(effectQueue=effectQueue,
-                          timerQueue=timerQueue,
-                          totalLEDs=totalLEDs,
-                          ringStart=ringStart,
-                          ringsLEDs=ringsLEDs,
-                          cabinetStart=cabinetStart,
-                          cabinetLEDs=cabinetLEDs,
-                          )
+                     timerQueue=timerQueue,
+                     totalLEDs=TOTAL_LEDS,
+                     ringStart=RING_START,
+                     ringsLEDs=RING_LEDS,
+                     cabinetStart=CABINET_START,
+                     cabinetLEDs=CABINET_LEDS,
+                     host=OPC_HOST,
+                     port=OPC_PORT,)
 
-    p
+    def runEffects():
+        while True:
+            f, args = effectQueue.get()
+            if f != 'kill':
+                getattr(LEDs, f)(*args)
+            else:
+                return
 
+    def on_enter_idle():
+        effectQueue.put(['sineBeat',
+                         ([50, 50, 50], 2.0)])
 
+    def on_snap():
+        effectQueue.put(['singlePulse',
+                         ([0, 0, 128], .2)])
 
+    def on_error():
+        effectQueue.put(['squareBeat',
+                         ([150, 0, 0], 1.5, .2)])
 
+    def on_experiment():
+        effectQueue.put(['chaseLEDsTimer',
+                         ([128, 0, 0],  #chase color
+                          [0, 128, 0],  #timer color
+                          5.0,  # decay
+                          -1,
+                          -2,
+                          1
+                          )])
 
+        while not timerQueue.empty():  # Clean the timer queue in case things go to quick or we abort
+            timerQueue.get(block=False)
 
-# Setup stuff.
+    def on_start():
+        pass
+
+    def on_configure():
+        pass
+
+    def on_reset():
+        pass
+
+    def on_terminate():
+        effectQueue.put(['kill', None])
+
+## run the test
+
+    p = Process(target=runEffects)
+    print('Process created')
+
+    p.start()
+    print('Process started')
+
+    time.sleep(2)
+
+    on_enter_idle()
+    print('Entering Idle')
+    time.sleep(4)
+
+    on_experiment()
+    print('Running experiment')
+
+    for t in range(16):
+        timer = t / 16
+        timerQueue.put(timer)
+        time.sleep(1)
+
+    on_error()
+    print('error')
+
+    time.sleep(4)
+
+    on_terminate()
+    print('terminated')
+
+    p.join()
+    print('joined and finished')
+

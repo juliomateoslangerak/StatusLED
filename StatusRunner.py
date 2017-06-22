@@ -1,19 +1,21 @@
-'''
+"""
 In this module we create a state machine to follow the state of the executor and launch other tasks form the 
 Raspberry. The current setup wil manage the status lights.
-'''
-from multiprocessing import Process, Queue, Lock
-from transitions import Machine
-import Pyro4
+"""
+from multiprocessing import Process, Queue
+from transitions.extensions import HierarchicalMachine as Machine
+from time import sleep
+import json
+# import Pyro4
 
 from LEDs import StatusLED
 import socket
 
 ## TODO: get status led and UDP config from file
 
-UDP_IP_ADDRESS = "10.6.19.12"
-UDP_PORT_NO = 6666
-FPGA_UPDATE_RATE = .1 # At which rate is the FPGA sending update status signals
+UDP_IP_ADDRESS = "127.0.0.1"
+UDP_PORT_NO = 6665
+FPGA_UPDATE_RATE = .1  # At which rate is the FPGA sending update status signals
 
 
 RING_START = (512 - 64)
@@ -23,7 +25,7 @@ TOTAL_LEDS = sum(RING_LEDS)
 CABINET_START = 0
 CABINET_LEDS = 30
 
-OPC_HOST = 'localhost'
+OPC_HOST = '127.0.0.1'
 OPC_PORT = '7890'
 
 STATES = ['default',
@@ -31,12 +33,12 @@ STATES = ['default',
           'configure',
           'idle',
           'error',
-          {'name': 'action', 'children':['default',
-                                         'prepare',
-                                         'snap',
-                                         'experiment',
-                                         'mosaic',
-                                         ]},
+          {'name': 'action', 'children': ['default',
+                                          'prepare',
+                                          'snap',
+                                          'experiment',
+                                          'mosaic',
+                                          ]},
           'shutdown',
           ]
 
@@ -54,37 +56,38 @@ TRANSITIONS = [
 ]
 
 MainFPGA_to_FSMachine_state = {
-    '0':'default', # Default
-    '1':'start', # Start
-    '2':'configure', # Configuring
-    '3':'idle', # Idle
-    '4':'error', # Aborted
-    '5':'action', # Running Action
-    '6':'shutdown', # Shutdown
+    '0': 'default',     # Default
+    '1': 'start',       # Start
+    '2': 'configure',   # Configuring
+    '3': 'idle',        # Idle
+    '4': 'error',       # Aborted
+    '5': 'action',      # Running Action
+    '6': 'shutdown',    # Shutdown
 }
 
-SecondaryFPGA_to_FSMachine_state = {
-    '0':'default', # Default
-    '1':'experiment', # Executing Experiment
-    '2':'prepare', # Transferring Digitals
-    '3':'prepare', # Transferring Analogues
-    '4':'prepare', # Writing Indexes
-    '5':'prepare', # Writing Digitals
-    '6':'prepare', # Writing Analogue
-    '7':'snap', # Taking Snap
-    '8':'prepare', # Flushing FIFOs
-    '9':'prepare', # Updating Repetitions
-    '10':'mosaic', # Running Slow Mosaic
-    '11':'mosaic', # Running Fast Mosaic
+ActionFPGA_to_FSMachine_state = {
+    '0': 'default',     # Default
+    '1': 'experiment',  # Executing Experiment
+    '2': 'prepare',     # Transferring Digitals
+    '3': 'prepare',     # Transferring Analogues
+    '4': 'prepare',     # Writing Indexes
+    '5': 'prepare',     # Writing Digitals
+    '6': 'prepare',     # Writing Analogue
+    '7': 'snap',        # Taking Snap
+    '8': 'prepare',     # Flushing FIFOs
+    '9': 'prepare',     # Updating Repetitions
+    '10': 'mosaic',     # Running Slow Mosaic
+    '11': 'mosaic',     # Running Fast Mosaic
 }
 
-class FSMachine():
+
+class FSMachine:
     """This is a class to hold a Finite State Machine.
     It is intended to handle the different states and control a response according to this state.
     The actions are running as separate processes and 
     there is a main loop getting status from the executor through a UDP socket and triggering the transitions"""
     # Define a State Machine
-    def __init__(self, states, transitions, stateQueue, timerQueue, effectQueue, initialState='start'):
+    def __init__(self, states, transitions, timerQueue, effectQueue, initialState='start'):
         self.machine = Machine(model=self,
                                states=states,
                                transitions=transitions,
@@ -130,7 +133,7 @@ class FSMachine():
         self.effectQueue.put(['on_enter_shutdown', None])
 
 
-class FPGAStatus():
+class FPGAStatus:
     def __init__(self, host, port):
         ## Create a dictionary to store the full FPGA state
         self.currentFPGAStatus = {}
@@ -142,41 +145,42 @@ class FPGAStatus():
         ## Create the FSM
         self.machine = FSMachine(states=STATES,
                                  transitions=TRANSITIONS,
-                                 stateQueue=self.stateQueue,
-                                 timerQueue=self.stateQueue,
+                                 timerQueue=self.timerQueue,
                                  effectQueue=self.effectQueue,
                                  )
 
-        ## create a socket
+        ## create a socket to listen
         self.socket = self.createReceiveSocket(host, port)
 
         ## Create a handle to stop the thread
         self.shouldRun = True
 
     def createReceiveSocket(self, host, port):
-        '''
+        """
         Creates a UDP socket meant to receive status information
         form the RT-host
         returns the bound socket
-        '''
+        """
         try:
             # Create an AF_INET, Datagram socket (UDP)
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        except socket.error, msg:
-            print 'Failed to create socket. Error code: ' + str(msg[0]) + ' , Error message : ' + msg[1]
+        except socket.error as msg:
+            print('Failed to create socket. Error code: {}. Error message: {}'.format(msg[0], msg[1]))
+            return
 
         try:
             # Bind Socket to local host and port
-            s.bind((host , port))
-        except socket.error, msg:
-            print 'Failed to bind address. Error code:' + str(msg[0]) + ' , Error message : ' + msg[1]
+            s.bind((host, port))
+        except socket.error as msg:
+            print('Failed to bind address. Error code: {}. Error message: {}'.format(msg[0], msg[1]))
+            return
 
         return s
 
-    def getStatus(self, key = None):
-        '''
+    def get_status(self, key=None):
+        """
         Method to call from outside to get the status
-        '''
+        """
         if key and self.currentFPGAStatus is not None:
             try:
                 return self.currentFPGAStatus[key]
@@ -186,30 +190,41 @@ class FPGAStatus():
             return self.currentFPGAStatus
 
     def poll_fpga_status(self):
-        '''
-        This method polls to a UDP socket and get the status information
+        """
+        This method polls to the UDP socket and gets the status information
         of the RT-host and FPGA.
         Returns a json object that we can use to update the status dictionary
-        '''
+        """
         try:
             # Receive Datagram
             datagramLength = int(self.socket.recvfrom(4)[0])
             datagram = self.socket.recvfrom(datagramLength)[0]
-        except:
-            print('No datagram')
+        except socket.error as msg:
+            print('Failed to get Datagram. Error code: {}. Error message: {}'.format(msg[0], msg[1]))
             return None
-        # parse json datagram
-        return json.loads(datagram)
+        return json.loads(datagram.decode())
 
-    def trigger_transition(self, newStatus):
-        '''
-        FInd interesting state or status changes in the FPGA and trigger
+    def trigger_event(self, newStatus):
+        """
+        FInd 'interesting' status or state changes in the FPGA and trigger events or
         the corresponding machine transitions.
         return the newStatus but with the status reset so not to queue multiple times
-        '''
+        """
+        # Get a state change
         if self.currentFPGAStatus['FPGA Main State'] != newStatus['FPGA Main State']:
-            new_main_state = MainFPGA_to_FSMachine_state[newStatus['FPGA Main State']]
+            new_state = MainFPGA_to_FSMachine_state[newStatus['FPGA Main State']]
+            # TODO: We have to generalize this into the Hierarchical SM. I do not know how to do this best
+            if new_state == '5':
+                new_state = new_state + '_' + ActionFPGA_to_FSMachine_state[newStatus['Action State']]
 
+            try:
+                getattr(self.machine, new_state)()
+            except:
+                print('Could not get that new state')
+
+        # get a timer update and post it into the timer_queue
+        if self.currentFPGAStatus['Timer'] != newStatus['Timer']:
+            self.timerQueue.put(newStatus['Timer'])
 
         return newStatus
 
@@ -221,10 +236,10 @@ class FPGAStatus():
             newFPGAStatus = self.poll_fpga_status()
             if newFPGAStatus is not None and newFPGAStatus != self.currentFPGAStatus:
                 # Trigger a transition and update current state
-                self.currentFPGAStatus = self.trigger_transition(newStatus = newFPGAStatus)
+                self.currentFPGAStatus = self.trigger_event(newStatus=newFPGAStatus)
 
             ## wait for a period of half the broadcasting rate of the FPGA
-            time.sleep(FPGA_UPDATE_RATE / 2)
+            sleep(FPGA_UPDATE_RATE / 2)
 
 
 class StatusLEDProcessor(Process):
@@ -256,7 +271,7 @@ class StatusLEDProcessor(Process):
                               host=host,
                               port=port,)
 
-    def run(self)
+    def run(self):
         while True:
             f, x = self.effectQueue.get()
             if f != 'kill':
@@ -279,7 +294,7 @@ class StatusLEDProcessor(Process):
 
         :return: None
         """
-        self.LEDs.singlePulse(pulseColor=[0,0,128], t=.2)
+        self.LEDs.singlePulse(pulseColor=[0, 0, 128], t=.2)
 
     def on_error(self):
         """
@@ -303,7 +318,7 @@ class StatusLEDProcessor(Process):
                                  frequency=.6
                                  )
 
-        while is not self.timerQueue.empty(): # Clean the timer queue in case things go to quick or we abort
+        while not self.timerQueue.empty(): # Clean the timer queue in case things go to quick or we abort
             self.timerQueue.get(block=False)
 
     def on_start(self):
@@ -317,3 +332,13 @@ class StatusLEDProcessor(Process):
 
     def on_terminate(self):
         self.terminate()
+
+if __name__ == '__main__':
+
+    from Tester import Tester
+
+    Status_controller = FPGAStatus(host=UDP_IP_ADDRESS, port=UDP_PORT_NO)
+    print('Status Controller created')
+
+    print('Status Controller running')
+    Status_controller.run()

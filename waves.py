@@ -46,6 +46,8 @@ import math
 #  - The opposite outer pin connect to board 3.3V or ADC max reference voltage.
 #  - The middle pin connected to an analog input.
 ################################################################################
+
+
 class Signal:
 
     @property
@@ -60,6 +62,10 @@ class Signal:
         # specified target range (y0...y1).  If this signal has no bounds/range
         # then the value is just clamped to the specified range.
         x = self()
+        if callable(y0):
+            y0 = y0()
+        if callable(y1):
+            y1 = y1()
         if self.range is not None:
             # This signal has a known range so we can interpolate between it
             # and the desired target range (y0...y1).
@@ -73,6 +79,7 @@ class Signal:
     def discrete_transform(self, y0, y1):
         # Transform assuming discrete integer values instead of floats.
         return int(self.transform(y0, y1))
+
 
 class SignalSource:
 
@@ -96,6 +103,7 @@ class SignalSource:
             # that's callable to capture and always return it.
             self._source = lambda: source
 
+
 class SineWave(Signal):
 
     def __init__(self, time=0.0, amplitude=1.0, frequency=1.0, phase=0.0):
@@ -111,11 +119,12 @@ class SineWave(Signal):
         # be necessary in practice and could be switched back to a
         # non-SignalSource static value set once at initialization.
         amplitude = self.amplitude()
-        return (-amplitude, amplitude)
+        return -amplitude, amplitude
 
     def __call__(self):
         return self.amplitude() * \
                math.sin(2*math.pi*self.frequency()*self.time() + self.phase())
+
 
 class SquareWave(Signal):
 
@@ -133,7 +142,7 @@ class SquareWave(Signal):
         # be necessary in practice and could be switched back to a
         # non-SignalSource static value set once at initialization.
         amplitude = self.amplitude()
-        return (-amplitude, amplitude)
+        return -amplitude, amplitude
 
     def __call__(self):
         cycle = 1 / self.frequency()
@@ -142,6 +151,7 @@ class SquareWave(Signal):
             return self.amplitude()
         else:
             return -1 * self.amplitude()
+
 
 class DecayWave(Signal):
 
@@ -159,11 +169,12 @@ class DecayWave(Signal):
         # be necessary in practice and could be switched back to a
         # non-SignalSource static value set once at initialization.
         amplitude = self.amplitude()
-        return (0, amplitude)
+        return 0, amplitude
 
     def __call__(self):
         reminder = (self.time() + self.phase()) % (1 / self.frequency())
         return self.amplitude() * math.exp(-1 * self.decay() * reminder)
+
 
 class TransformedSignal(Signal):
 
@@ -178,8 +189,7 @@ class TransformedSignal(Signal):
 
     @property
     def range(self):
-        return (y0, y1)
+        return self.y0, self.y1
 
     def __call__(self):
         return self._transform(self.y0, self.y1)
-
