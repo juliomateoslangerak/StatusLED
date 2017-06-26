@@ -6,20 +6,20 @@ from multiprocessing import Process, Queue
 from transitions.extensions import HierarchicalMachine as Machine
 from time import sleep
 import json
-# import Pyro4
+import socket
+import logging
 
 from LEDs import StatusLED
-import socket
 
 ## TODO: get status led and UDP config from file
 
-UDP_IP_ADDRESS = "127.0.0.1"
-UDP_PORT_NO = 6665
+UDP_IP_ADDRESS = "localhost"
+UDP_PORT_NO = 6666
 FPGA_UPDATE_RATE = .1  # At which rate is the FPGA sending update status signals
 
 
 RING_START = (512 - 64)
-RING_LEDS = (1, 6, 12, 24)
+RING_LEDS = (1, 6, 16, 24)
 TOTAL_LEDS = sum(RING_LEDS)
 
 CABINET_START = 0
@@ -43,16 +43,16 @@ STATES = ['default',
           ]
 
 TRANSITIONS = [
-    ['on_default',       '*',            'default'],
-    ['on_start',         'shutdown',     'start'],
-    ['on_configure',     'start',        'configure'],
-    ['on_idle',          '*',            'idle'],
-    ['on_error',         '*',            'error'],
-    ['on_prepare',       'idle',         'action_prepare'],
-    ['on_snap',          'idle',         'action_snap'],
-    ['on_experiment',    'idle',         'action_experiment'],
-    ['on_mosaic',        'idle',         'action_mosaic'],
-    ['on_shutdown',      '*',            'shutdown'],
+    ['on_default',           '*',            'default'],
+    ['on_start',             'shutdown',     'start'],
+    ['on_configure',         'start',        'configure'],
+    ['on_idle',              '*',            'idle'],
+    ['on_error',             '*',            'error'],
+    ['on_action_prepare',    'idle',         'action_prepare'],
+    ['on_action_snap',       'idle',         'action_snap'],
+    ['on_action_experiment', 'idle',         'action_experiment'],
+    ['on_action_mosaic',     'idle',         'action_mosaic'],
+    ['on_shutdown',          '*',            'shutdown'],
 ]
 
 MainFPGA_to_FSMachine_state = {
@@ -115,22 +115,27 @@ class FSMachine:
 
     # Configure the callbacks of the machine
     def on_enter_idle(self):
-        self.effectQueue.put(['on_enter_idle', None])
+        self.effectQueue.put(['on_enter_idle', ()])
 
     def on_enter_error(self):
-        self.effectQueue.put(['on_enter_error', None])
+        self.effectQueue.put(['on_enter_error', ()])
 
     def on_enter_snap(self):
-        self.effectQueue.put(['on_enter_snap', None])
+        self.effectQueue.put(['on_enter_snap', ()])
 
     def on_enter_experiment(self):
-        self.effectQueue.put(['on_enter_experiment', None])
+        self.effectQueue.put(['on_enter_experiment', ()])
 
     def on_enter_start(self):
-        self.effectQueue.put(['on_enter_start', None])
+        self.effectQueue.put(['on_enter_start', ()])
 
     def on_enter_shutdown(self):
-        self.effectQueue.put(['on_enter_shutdown', None])
+        self.effectQueue.put(['on_enter_shutdown', ()])
+
+    def on_kill(self):
+        self.effectQueue.put(['kill', ()])
+        while not self.timerQueue.empty():  # Clean the timer queue
+            self.timerQueue.get(block=False)
 
 
 class FPGAStatus:
@@ -164,15 +169,15 @@ class FPGAStatus:
         try:
             # Create an AF_INET, Datagram socket (UDP)
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        except socket.error as msg:
-            print('Failed to create socket. Error code: {}. Error message: {}'.format(msg[0], msg[1]))
+        except socket.error as e:
+            print(f'Failed to create socket. Error message: {e}')
             return
 
         try:
             # Bind Socket to local host and port
             s.bind((host, port))
-        except socket.error as msg:
-            print('Failed to bind address. Error code: {}. Error message: {}'.format(msg[0], msg[1]))
+        except socket.error as e:
+            print(f'Failed to bind address. Error message: {e}')
             return
 
         return s
@@ -199,8 +204,8 @@ class FPGAStatus:
             # Receive Datagram
             datagramLength = int(self.socket.recvfrom(4)[0])
             datagram = self.socket.recvfrom(datagramLength)[0]
-        except socket.error as msg:
-            print('Failed to get Datagram. Error code: {}. Error message: {}'.format(msg[0], msg[1]))
+        except socket.error as e:
+            print(f'Failed to get Datagram. Error message: {e}')
             return None
         return json.loads(datagram.decode())
 
@@ -214,11 +219,11 @@ class FPGAStatus:
         if self.currentFPGAStatus['FPGA Main State'] != newStatus['FPGA Main State']:
             new_state = MainFPGA_to_FSMachine_state[newStatus['FPGA Main State']]
             # TODO: We have to generalize this into the Hierarchical SM. I do not know how to do this best
-            if new_state == '5':
+            if new_state == 'action':
                 new_state = new_state + '_' + ActionFPGA_to_FSMachine_state[newStatus['Action State']]
 
             try:
-                getattr(self.machine, new_state)()
+                getattr(self.machine, 'on_enter_' + new_state)()
             except:
                 print('Could not get that new state')
 
@@ -226,6 +231,7 @@ class FPGAStatus:
         if self.currentFPGAStatus['Timer'] != newStatus['Timer']:
             self.timerQueue.put(newStatus['Timer'])
 
+        print(newStatus)
         return newStatus
 
     def run(self):
@@ -273,9 +279,9 @@ class StatusLEDProcessor(Process):
 
     def run(self):
         while True:
-            f, x = self.effectQueue.get()
+            f, args = self.effectQueue.get()
             if f != 'kill':
-                getattr(self, f)(x)
+                getattr(self, f)(*args)
             else:
                 return
 
@@ -285,8 +291,8 @@ class StatusLEDProcessor(Process):
 
         :return: None
         """
-        self.LEDs.sineBeat(color=[50, 50, 50],
-                           frequency=2.0)
+        self.LEDs.sineBeat(color=[50, 50, 100],
+                           frequency=1.0)
 
     def on_snap(self):
         """
@@ -294,7 +300,12 @@ class StatusLEDProcessor(Process):
 
         :return: None
         """
-        self.LEDs.singlePulse(pulseColor=[0, 0, 128], t=.2)
+        ['multiplePulse',
+         ([[[0, 0, 128], 0.2],
+           [[0, 128, 0], 0.3],
+           [[200, 0, 0], 0.1]
+           ], -1)]
+        self.LEDs.multiplePulse(pattern=[[[0, 0, 128], 0.2]])
 
     def on_error(self):
         """
@@ -302,7 +313,7 @@ class StatusLEDProcessor(Process):
 
         :return: None
         """
-        self.LEDs.squareBeat(color=[200, 0, 0], frequency=.5, duty=.3)
+        self.LEDs.squareBeat(color=[150, 0, 0], frequency=2, duty=.3)
 
     def on_experiment(self):
         """
@@ -312,13 +323,13 @@ class StatusLEDProcessor(Process):
         """
         self.LEDs.chaseLEDsTimer(chaseColor=[128, 0, 0],
                                  timerColor=[0, 128, 0],
-                                 decay=1.0,
-                                 chaseRing=3,
-                                 timerRing=2,
+                                 decay=6.0,
+                                 chaseRing=-1,
+                                 timerRing=-2,
                                  frequency=.6
                                  )
 
-        while not self.timerQueue.empty(): # Clean the timer queue in case things go to quick or we abort
+        while not self.timerQueue.empty():  # Clean the timer queue in case things go to quick or we abort
             self.timerQueue.get(block=False)
 
     def on_start(self):
@@ -335,10 +346,9 @@ class StatusLEDProcessor(Process):
 
 if __name__ == '__main__':
 
-    from Tester import Tester
-
     Status_controller = FPGAStatus(host=UDP_IP_ADDRESS, port=UDP_PORT_NO)
     print('Status Controller created')
 
     print('Status Controller running')
     Status_controller.run()
+

@@ -40,11 +40,20 @@ class Tester:
                     'Action State': '0',
                     'Timer': '0',
                     'Other Status Elements': 'WhatEver'}
-        self.send_msg()
 
     def send_msg(self):
         data = json.dumps(self.msg)
+        length = len(data)
+        length = str(length).rjust(4)
+        try:
+            self.sock.sendto(length.encode(), self.addr)
+            print('Sent:')
+            print(length)
+        except:
+            print('Could not send length')
         self.sock.sendto(data.encode(), self.addr)
+        print('Sent:')
+        print(data)
 
     def run_experiment(self, duration):
 
@@ -64,7 +73,6 @@ class Tester:
         self.msg['Action State'] = '0'
 
         self.send_msg()
-
 
 
     def run_snap(self):

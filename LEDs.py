@@ -337,6 +337,7 @@ class StatusLED:
         self.timer.update(0.0)
         self.duty.update(1 / self.ringsLEDs[timerRing])
 
+        # TODO: fix rings start point
         chaseStartLED = self.ringStart
         timerStartLED = self.ringStart + self.ringsLEDs[chaseRing]
 
@@ -389,7 +390,7 @@ class StatusLED:
                                                        self.green_sineWave(),
                                                        self.blue_sineWave())
             self.setLEDs(waveIntensity)
-            time.sleep(0.1)
+            # time.sleep(0.1)
 
         self.setLEDs(None)
 
@@ -418,7 +419,7 @@ class StatusLED:
                                                        self.green_squareWave(),
                                                        self.blue_squareWave())
             self.setLEDs(waveIntensity)
-            time.sleep(0.1)
+            # time.sleep(0.1)
 
         self.setLEDs(None)
 
@@ -530,11 +531,14 @@ if __name__ == '__main__':
 
     def on_enter_idle():
         effectQueue.put(['sineBeat',
-                         ([50, 50, 50], 2.0)])
+                         ([100, 100, 100], .3)])
 
     def on_snap():
-        effectQueue.put(['singlePulse',
-                         ([0, 0, 128], .2)])
+        effectQueue.put(['multiplePulse',
+                         ([[[0, 0, 128], 0.3],
+                           [[0, 128, 0], 0.8],
+                           [[200, 0, 0], 0.1]
+                           ], -1)])
 
     def on_error():
         effectQueue.put(['squareBeat',
@@ -542,12 +546,12 @@ if __name__ == '__main__':
 
     def on_experiment():
         effectQueue.put(['chaseLEDsTimer',
-                         ([128, 0, 0],  #chase color
-                          [0, 128, 0],  #timer color
-                          5.0,  # decay
+                         ([128, 20, 20],  #chase color
+                          [0, 128, 128],  #timer color
+                          6.0,  # decay
                           -1,
                           -2,
-                          1
+                          2
                           )])
 
         while not timerQueue.empty():  # Clean the timer queue in case things go to quick or we abort
@@ -564,6 +568,10 @@ if __name__ == '__main__':
 
     def on_terminate():
         effectQueue.put(['kill', None])
+        while not timerQueue.empty():  # Clean the timer queue
+            timerQueue.get(block=False)
+
+
 
 ## run the test
 
@@ -577,7 +585,11 @@ if __name__ == '__main__':
 
     on_enter_idle()
     print('Entering Idle')
-    time.sleep(4)
+    time.sleep(5)
+
+    on_snap()
+    print('taking snap')
+    time.sleep(2)
 
     on_experiment()
     print('Running experiment')
@@ -585,7 +597,7 @@ if __name__ == '__main__':
     for t in range(16):
         timer = t / 16
         timerQueue.put(timer)
-        time.sleep(1)
+        time.sleep(.5)
 
     on_error()
     print('error')
