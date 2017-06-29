@@ -114,20 +114,29 @@ class FSMachine:
         self.statusLEDs.start()
 
     # Configure the callbacks of the machine
+    def on_enter_start(self):
+        self.effectQueue.put(['on_enter_start', ()])
+
+    def on_enter_configure(self):
+        self.effectQueue.put(['on_enter_configure', ()])
+
     def on_enter_idle(self):
         self.effectQueue.put(['on_enter_idle', ()])
 
     def on_enter_error(self):
         self.effectQueue.put(['on_enter_error', ()])
 
-    def on_enter_snap(self):
-        self.effectQueue.put(['on_enter_snap', ()])
+    def on_enter_action_experiment(self):
+        self.effectQueue.put(['on_enter_action_experiment', ()])
 
-    def on_enter_experiment(self):
-        self.effectQueue.put(['on_enter_experiment', ()])
+    def on_enter_action_prepare(self):
+        self.effectQueue.put(['on_enter_action_prepare', ()])
 
-    def on_enter_start(self):
-        self.effectQueue.put(['on_enter_start', ()])
+    def on_enter_action_snap(self):
+        self.effectQueue.put(['on_enter_action_snap', ()])
+
+    def on_enter_action_mosaic(self):
+        self.effectQueue.put(['on_enter_action_mosaic', ()])
 
     def on_enter_shutdown(self):
         self.effectQueue.put(['on_enter_shutdown', ()])
@@ -221,9 +230,10 @@ class FPGAStatus:
             # TODO: We have to generalize this into the Hierarchical SM. I do not know how to do this best
             if new_state == 'action':
                 new_state = new_state + '_' + ActionFPGA_to_FSMachine_state[newStatus['Action State']]
+                print(new_state)
 
             try:
-                getattr(self.machine, 'on_enter_' + new_state)()
+                getattr(self.machine, 'on_' + new_state)()
             except:
                 print('Could not get that new state')
 
@@ -278,6 +288,7 @@ class StatusLEDProcessor(Process):
                               port=port,)
 
     def run(self):
+        self.initializeLEDs()
         while True:
             f, args = self.effectQueue.get()
             if f != 'kill':
@@ -285,37 +296,37 @@ class StatusLEDProcessor(Process):
             else:
                 return
 
+    def initializeLEDs(self):
+        self.LEDs.setLEDs(intensity=None)
+
+    def on_enter_start(self):
+        pass
+
+    def on_enter_configure(self):
+        pass
+
     def on_enter_idle(self):
         """
         Function to call on idle
 
         :return: None
         """
-        self.LEDs.sineBeat(color=[50, 50, 100],
+        self.LEDs.sineBeat(color=[50, 50, 50],
+                           glow=[20, 20, 20],
                            frequency=1.0)
 
-    def on_snap(self):
+    def on_enter_error(self):
         """
-        Function to call on an image snap
+        Method to call on error. It blinks on the defined color, duty and frequency
 
         :return: None
         """
-        ['multiplePulse',
-         ([[[0, 0, 128], 0.2],
-           [[0, 128, 0], 0.3],
-           [[200, 0, 0], 0.1]
-           ], -1)]
-        self.LEDs.multiplePulse(pattern=[[[0, 0, 128], 0.2]])
+        self.LEDs.squareBeat(color=[150, 0, 0],
+                             glow=[50, 0, 0],
+                             frequency=2,
+                             duty=.3)
 
-    def on_error(self):
-        """
-        Method to call on error. It blinks on the defined color and frequency
-
-        :return: None
-        """
-        self.LEDs.squareBeat(color=[150, 0, 0], frequency=2, duty=.3)
-
-    def on_experiment(self):
+    def on_enter_action_experiment(self):
         """
         Function to call on experiment start
 
@@ -323,19 +334,31 @@ class StatusLEDProcessor(Process):
         """
         self.LEDs.chaseLEDsTimer(chaseColor=[128, 0, 0],
                                  timerColor=[0, 128, 0],
-                                 decay=6.0,
+                                 decay=8.0,
                                  chaseRing=-1,
                                  timerRing=-2,
-                                 frequency=.6
+                                 speed=2,
+                                 frequency=1
                                  )
 
         while not self.timerQueue.empty():  # Clean the timer queue in case things go to quick or we abort
             self.timerQueue.get(block=False)
 
-    def on_start(self):
+    def on_enter_action_prepare(self):
         pass
 
-    def on_configure(self):
+    def on_enter_action_snap(self):
+        """
+        Function to call on an image snap
+
+        :return: None
+        """
+        self.LEDs.multiplePulse(pattern=[[[0, 0, 255], 0.005]])
+
+    def on_enter_action_mosaic(self):
+        pass
+
+    def on_enter_shutdown(self):
         pass
 
     def on_reset(self):

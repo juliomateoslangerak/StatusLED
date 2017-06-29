@@ -72,8 +72,8 @@ class FrameClock(waves.Signal):
     def __init__(self):
         self._current_s = time.time()
 
-    def update(self):
-        self._current_s = time.time()
+    def update(self, speed=1.0):
+        self._current_s = time.time() * speed
 
     def __call__(self):
         return self._current_s
@@ -314,7 +314,7 @@ class StatusLED:
 
         self.setLEDs(None)
 
-    def chaseLEDsTimer(self, chaseColor, timerColor, decay=1.0, chaseRing=-1, timerRing=-2, frequency=1.0):
+    def chaseLEDsTimer(self, chaseColor, timerColor, decay=1.0, chaseRing=-1, timerRing=-2, speed=1.0, frequency=1.0):
         """
         Creates a LED chasing effect
         :param color: tupple with the color to display
@@ -344,9 +344,9 @@ class StatusLED:
         waveIntensity = copy.copy(self.intensity)
 
         while self.effectQueue.empty():
-            self.clock.update()
+            self.clock.update(speed)
             if not self.timerQueue.empty():
-                self.timer.update(self.timerQueue.get(block=False))
+                self.timer.update(float(self.timerQueue.get(block=False)))
 
             for led in range(self.ringsLEDs[chaseRing]):
                 self.noPiBasedPhase.update(led, self.ringsLEDs[chaseRing])
@@ -366,14 +366,22 @@ class StatusLED:
 
         self.setLEDs(None)
 
-    def sineBeat(self, color, frequency=1.0):
+    def sineBeat(self, color, glow=None, frequency=1.0):
         """
-        Creates a sinusoidal 'heart beat' of all leds
-        :param color: tupple with the color to display
-        :param state: which state is holding this effect
-        :param frequency: how many turns per second. Defaults to 1
+        Creates a sinusoidal 'heart beat' of all leds between color and glow
+        :param color: tuple with the color to display
+        :param glow: tuple with the background color to display
+        :param frequency: how many oscilaitons per second. Defaults to 1
         :return: None
         """
+        curGlow = 0
+
+        if glow:
+            curGlow = self.glow
+            self.redGlow.update(glow[0])
+            self.greenGlow.update(glow[1])
+            self.blueGlow.update(glow[2])
+
         self.redIntensity.update(color[0])
         self.greenIntensity.update(color[1])
         self.blueIntensity.update(color[2])
@@ -392,16 +400,30 @@ class StatusLED:
             self.setLEDs(waveIntensity)
             # time.sleep(0.1)
 
+        if curGlow:
+            self.redGlow.update(curGlow[0])
+            self.greenGlow.update(curGlow[1])
+            self.blueGlow.update(curGlow[2])
+
         self.setLEDs(None)
 
-    def squareBeat(self, color, frequency=1.0, duty=.5):
+    def squareBeat(self, color, glow=None, frequency=1.0, duty=.5):
         """
         Creates a square 'heart beat' of all leds.
         :param color: tupple with the color to display
-        :param state: which state is holding this effect
+        :param glow: tuple with the background color to display
         :param frequency: how many turns per second. Defaults to 1
+        :param duty: duty of the beat. Fraction of on time
         :return: None
         """
+        curGlow = 0
+
+        if glow:
+            curGlow = self.glow
+            self.redGlow.update(glow[0])
+            self.greenGlow.update(glow[1])
+            self.blueGlow.update(glow[2])
+
         self.redIntensity.update(color[0])
         self.greenIntensity.update(color[1])
         self.blueIntensity.update(color[2])
@@ -419,7 +441,11 @@ class StatusLED:
                                                        self.green_squareWave(),
                                                        self.blue_squareWave())
             self.setLEDs(waveIntensity)
-            # time.sleep(0.1)
+
+        if curGlow:
+            self.redGlow.update(curGlow[0])
+            self.greenGlow.update(curGlow[1])
+            self.blueGlow.update(curGlow[2])
 
         self.setLEDs(None)
 
@@ -531,7 +557,10 @@ if __name__ == '__main__':
 
     def on_enter_idle():
         effectQueue.put(['sineBeat',
-                         ([100, 100, 100], .3)])
+                         ([80, 150, 80],  # color
+                          [150, 80, 80],  # glow
+                          .2  # frequency
+                          )])
 
     def on_snap():
         effectQueue.put(['multiplePulse',
@@ -542,16 +571,21 @@ if __name__ == '__main__':
 
     def on_error():
         effectQueue.put(['squareBeat',
-                         ([150, 0, 0], 1.5, .2)])
+                         ([150, 0, 0],  # color
+                          [20, 0, 0],  # glow
+                          1.5,  # frequency
+                          .2  # duty
+                          )])
 
     def on_experiment():
         effectQueue.put(['chaseLEDsTimer',
                          ([128, 20, 20],  #chase color
                           [0, 128, 128],  #timer color
                           6.0,  # decay
-                          -1,
-                          -2,
-                          2
+                          -1, # chase ring
+                          -2, # timer ring
+                          2, # speed
+                          2 # frequency
                           )])
 
         while not timerQueue.empty():  # Clean the timer queue in case things go to quick or we abort
@@ -585,11 +619,11 @@ if __name__ == '__main__':
 
     on_enter_idle()
     print('Entering Idle')
-    time.sleep(5)
+    time.sleep(8)
 
     on_snap()
     print('taking snap')
-    time.sleep(2)
+    # time.sleep(2)
 
     on_experiment()
     print('Running experiment')

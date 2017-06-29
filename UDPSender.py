@@ -31,7 +31,7 @@ ActionFPGA_to_FSMachine_state = {
 }
 
 
-class Tester:
+class Sender:
     def __init__(self, ipAdress, port):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(1)
@@ -64,10 +64,10 @@ class Tester:
         end_time = start_time + duration
 
         while time() <= end_time:
-            currentTime = str(round((time()-start_time / duration), 2))
+            currentTime = str(round(((time() - start_time) / duration), 2))
             self.msg['Timer'] = currentTime
             self.send_msg()
-            sleep(.1)
+            sleep(0.2)
 
         self.msg['FPGA Main State'] = '3'
         self.msg['Action State'] = '0'
@@ -120,7 +120,7 @@ class Tester:
 
 if __name__ == '__main__':
 
-    t = Tester(ipAdress='127.0.0.1', port=6666)
+    t = Sender(ipAdress='127.0.0.1', port=6666)
     print('Tester created')
 
     t.run_start()
